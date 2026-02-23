@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Web Apps Manager
+Comment=Manage your web apps with rofi
+Exec=webapp-manager
+Icon=/usr/share/icons/webapp-manager.png
+Type=Application
+Categories=Network;Utility;
+Keywords=webapp;browser;rofi;
