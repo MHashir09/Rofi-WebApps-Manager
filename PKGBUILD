@@ -15,13 +15,12 @@ depends=(
     'bash'
     'rofi'
 )
-source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
-        "webapp-manager.install")
-sha256sums=('SKIP'
-            'SKIP')
+source=("https://github.com/MHashir09/Rofi-WebApps-Manager/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+_reponame="Rofi-WebApps-Manager"
 
 package() {
-    cd "$srcdir/rofi-webapps-manager"
     cd "$srcdir/$_reponame-$pkgver"
     install -Dm755 webapp-manager.sh "$pkgdir/usr/bin/webapp-manager"
     install -Dm644 webapp-manager.desktop "$pkgdir/usr/share/applications/webapp-manager.desktop"
