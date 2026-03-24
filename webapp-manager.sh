@@ -16,6 +16,14 @@ APPS_DIR="$HOME/.local/share/applications"
 # // -- Directory where webapp icons are stored -- //
 ICON_DIR="$HOME/.local/share/icons/webapps"
 
+# // -- Handle arguments -- //
+case "${1:-}" in
+    --version|-v)
+        echo "webapp-manager 0.5.0"
+        exit 0
+        ;;
+esac
+
 # ============================================
 #             HELPER FUNCTIONS               #
 # ============================================
@@ -31,7 +39,39 @@ get_webapps() {
 get_webapp_names() {
     while IFS= read -r f; do
         grep "^Name=" "$f" | cut -d= -f2
-    done < <(get_webapps)
+    done < <(get_webapps) | sort
+}
+
+# // -- Finds the .desktop file for a given webapp name (case-insensitive) -- //
+# -- Uses grep to search by content rather than filename to handle spaces --
+get_file_by_name() {
+    local name="$1"
+    grep -ril "^Name=$name" "$APPS_DIR" 2>/dev/null | head -1
+}
+
+# // -- Check if a webapp with given name or URL already exists -- //
+check_duplicate() {
+    local name="$1"
+    local url="$2"
+
+    # -- check for duplicate name (case-insensitive) --
+    for existing in $(get_webapp_names); do
+        if [[ "${existing,,}" == "${name,,}" ]]; then
+            echo "name"
+            return
+        fi
+    done
+
+    # -- check for duplicate URL --
+    for f in $(get_webapps); do
+        local existing_url=$(grep "^Exec=" "$f" | sed 's/.*--app=\([^ ]*\).*/\1/')
+        if [[ "$existing_url" == "$url" ]]; then
+            echo "url"
+            return
+        fi
+    done
+
+    return 1
 }
 
 # // -- Finds the .desktop file for a given webapp name -- //
@@ -86,6 +126,52 @@ fetch_favicon() {
     fi
 }
 
+# // -- Helper to generate rofi theme strings -- //
+rofi_theme() {
+    local type="$1"
+    local width="${2:-280px}"
+    local padding="${3:-20px}"
+    local placeholder="${4:-}"
+
+    case "$type" in
+        input)
+            cat <<EOF
+listview { columns: 1; }
+window {
+    width: $width;
+    height: 50px;
+}
+mainbox { padding: -1px; }
+inputbar {
+    children: [prompt, entry];
+    padding: 12px $padding;
+}
+entry {
+    expand: true;
+    placeholder: "$placeholder";
+}
+EOF
+            ;;
+        select)
+            cat <<EOF
+listview {
+    columns: 1;
+    fixed-columns: true;
+}
+window {
+    width: $width;
+    x-offset: 0;
+    y-offset: 0;
+}
+inputbar { children: [prompt]; }
+textbox-prompt-colon { enabled: false; }
+entry { enabled: false; }
+element-text { horizontal-align: 0; }
+EOF
+            ;;
+    esac
+}
+
 # =============================================
 #             MAIN FUNCTIONS                  #
 # =============================================
@@ -96,45 +182,27 @@ fetch_favicon() {
 summon_webapp() {
     # -- prompt for app name --
     NAME=$(rofi -dmenu -p "  Enter the name of web-app  󰁖  " -lines 0 \
-        -theme-str '
-            window {
-                width: 650px;
-                height: 50px;
-            }
-            mainbox { padding: -1px; }
-            inputbar {
-                children: [prompt, entry];
-                padding: 12px 20px;
-            }
-            entry {
-                expand: true;
-                placeholder: "e.g. YouTube";
-            }
-        ')
+        -theme-str "$(rofi_theme input 650px 20px "e.g. YouTube")")
     [ -z "$NAME" ] && return
 
     # -- prompt for URL --
     URL=$(rofi -dmenu -p "  Enter the URL  󰁖  " -lines 0 \
-        -theme-str '
-            window {
-                width: 750px;
-                height: 50px;
-            }
-            mainbox { padding: -1px; }
-            inputbar {
-                children: [prompt, entry];
-                padding: 12px 30px;
-            }
-            entry {
-                expand: true;
-                placeholder: "e.g. youtube.com or https://www.youtube.com";
-            }
-        ')
+        -theme-str "$(rofi_theme input 750px 30px "e.g. youtube.com or https://www.youtube.com")")
     [ -z "$URL" ] && return
 
     # -- normalize and validate the URL before proceeding --
     URL=$(normalize_url "$URL")
     validate_url "$URL" || return
+
+    # -- check for duplicates --
+    local dup_type=$(check_duplicate "$NAME" "$URL")
+    if [[ "$dup_type" == "name" ]]; then
+        notify "A webapp with this name already exists!"
+        return
+    elif [[ "$dup_type" == "url" ]]; then
+        notify "A webapp with this URL already exists!"
+        return
+    fi
 
     # -- sanitize name for use as a filename by replacing spaces with dashes --
     FILENAME=$(echo "$NAME" | tr ' ' '-')
@@ -165,17 +233,7 @@ remove_webapp() {
     fi
 
     SELECTED=$(echo "$NAMES" | rofi -dmenu -p "  Remove Webapps" \
-      -theme-str '
-         window {
-            width: 260px;
-            x-offset: 0;
-            y-offset: 0;
-         }
-        inputbar { children: [prompt]; }
-        textbox-prompt-colon { enabled: false; }
-        entry { enabled: false; }
-        element-text { horizontal-align: 0; }
-      ')
+      -theme-str "$(rofi_theme select 260px)")
     [ -z "$SELECTED" ] && return
 
     FILE=$(get_file_by_name "$SELECTED")
@@ -222,16 +280,7 @@ migrate_webapps() {
 
     # -- show only display names to rofi, not binaries --
     SELECTED=$(printf "%s\n" "${DISPLAY_NAMES[@]}" | rofi -dmenu -i -p "   Select Browser" \
-        -theme-str '
-            window {
-                width: 280px;
-                x-offset: 0;
-                y-offset: 0;
-            }
-            inputbar { children: [prompt]; }
-            textbox-prompt-colon { enabled: false; }
-            entry { enabled: false; }
-        ')
+        -theme-str "$(rofi_theme select)")
     [ -z "$SELECTED" ] && return
 
     # -- find the binary that matches the selected display name --
@@ -261,16 +310,7 @@ migrate_webapps() {
 # // -- Lets user change the name, URL, or browser of existing webapps -- //
 modify_webapp() {
     ACTION=$(printf "Change Name\nChange URL\nMigrate WebApps" | rofi -dmenu -i -p "   Modify WebApps" \
-    -theme-str '
-        window {
-            width: 280px;
-            x-offset: 0;
-            y-offset: 0;
-        }
-        inputbar { children: [prompt]; }
-        textbox-prompt-colon { enabled: false; }
-        entry { enabled: false; }
-    ')
+    -theme-str "$(rofi_theme select)")
     [ -z "$ACTION" ] && return
 
     # -- migrate is handled separately since it doesnt need a specific webapp selected --
@@ -287,16 +327,7 @@ modify_webapp() {
 
     # -- let user pick which webapp to modify --
     SELECTED=$(echo "$NAMES" | rofi -dmenu -p "   Select Webapp" \
-    -theme-str '
-        window {
-            width: 280px;
-            x-offset: 0;
-            y-offset: 0;
-        }
-        inputbar { children: [prompt]; }
-        textbox-prompt-colon { enabled: false; }
-        entry { enabled: false; }
-    ')
+    -theme-str "$(rofi_theme select)")
     [ -z "$SELECTED" ] && return
 
     FILE=$(get_file_by_name "$SELECTED")
@@ -305,21 +336,7 @@ modify_webapp() {
     # // -- Changes Name of webapp -- //
     if [ "$ACTION" = "Change Name" ]; then
         NEW_NAME=$(rofi -dmenu -p "  Enter new name of WebApp  󰁖  " -lines 0 \
-            -theme-str '
-              window {
-                width: 750px;
-                height: 50px;
-              }
-              mainbox { padding: -1px; }
-              inputbar {
-                children: [prompt, entry];
-                padding: 12px 30px;
-              }
-             entry {
-                expand: true;
-                placeholder: "e.g. YouTube";
-             }
-           ')
+            -theme-str "$(rofi_theme input 750px 30px "e.g. YouTube")")
         [ -z "$NEW_NAME" ] && return
         NEW_FILENAME=$(echo "$NEW_NAME" | tr ' ' '-')
 
@@ -335,21 +352,7 @@ modify_webapp() {
     # // -- changes URL of the webapp -- //
     elif [ "$ACTION" = "Change URL" ]; then
         NEW_URL=$(rofi -dmenu -p "  Enter new URL of WebApp  󰁖  " -lines 0 \
-           -theme-str '
-              window {
-                width: 750px;
-                height: 50px;
-            }
-              mainbox { padding: -1px; }
-              inputbar {
-                children: [prompt, entry];
-                padding: 12px 30px;
-            }
-            entry {
-                expand: true;
-                placeholder: "e.g. youtube.com or https://www.youtube.com";
-            }
-           ')
+           -theme-str "$(rofi_theme input 750px 30px "e.g. youtube.com or https://www.youtube.com")")
         [ -z "$NEW_URL" ] && return
         NEW_URL=$(normalize_url "$NEW_URL")
         validate_url "$NEW_URL" || return
@@ -368,16 +371,7 @@ modify_webapp() {
 
 # // -- Main menu — shows three options and routes to the appropriate function -- //
 CHOICE=$(printf "Summon Webapp\nRemove Webapp\nModify Webapp" | rofi -dmenu -i -p "    Web-Apps-Man " \
-    -theme-str '
-        window {
-            width: 280px;
-            x-offset: 0;
-            y-offset: 0;
-        }
-        inputbar { children: [prompt]; }
-        textbox-prompt-colon { enabled: false; }
-        entry { enabled: false; }
-    ')
+    -theme-str "$(rofi_theme select)")
 
 # // -- Calls appropriate functions based on users choice -- //
 case "$CHOICE" in
